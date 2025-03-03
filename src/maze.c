@@ -1,6 +1,3 @@
-#include "stdio.h"
-#include "stdlib.h"
-#include "raylib.h"
 
 #define CELL_SIZE 24
 #define MAZE_WIDTH 28
@@ -42,6 +39,4 @@ static const char mazeLayout[MAZE_HEIGHT][MAZE_WIDTH+1] = {
 
 
 
-int main(){
-
-}
+g
