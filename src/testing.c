@@ -1,13 +1,16 @@
 
-#include <stdio.h>
+#include "stdio.h"
 #include "time.h"
 #include "stdlib.h"
+#include "windows.h"
+
+
 
 //0 = wall
 //1 = path
 
-#define WIDTH 23 
-#define HEIGHT 23
+#define WIDTH 993
+#define HEIGHT 993
 
 int dir[] = {0,1,2,3}; //directions to be used in random direction
 
@@ -37,7 +40,7 @@ void intialize(){             //intialize to 0 (unvisited)
 void printMaze() {
     for (int i = 0; i < HEIGHT; i++) {
         for (int j = 0; j < WIDTH; j++) {
-            printf(maze[i][j] ? " " : "██"   ); // if value true(!= 0)
+            printf(maze[i][j] ? " " : "#"   ); // if value true(!= 0)
         }                                      //prints space path 
                                                  //otherwise wall
         printf("\n");
@@ -68,6 +71,10 @@ void huntAndKill(int startX, int startY) {
               
             int nx = x +dx[dir[i]];
             int ny = y +dy[dir[i]];
+         //   printMaze();
+         //  Sleep(10); // 50ms delay (requires unistd.h on Linux)
+         //  system("cls"); // Clear screen for animation
+
 
             if(isvalid(nx,ny)){
 
@@ -81,46 +88,60 @@ void huntAndKill(int startX, int startY) {
                 found = 1; //found path
                 break; //onto next iteration
 
-
-
-
-
-
             }
 
-            if(found == 0){
-                int newX = -1, newY = -1;
-
-                for(int i =1;i<HEIGHT;i+=2){
-                    for(int j=1;j<WIDTH;j+=2){
-
-                        if(maze[i][j]==1){
-
-                            for(int s=0;s<4;s++){
-
-                                int nx = j + dx[s];
-                                int ny = i + dy[s];
-
-                                if(isvalid(nx,ny)){
-                                    newX = j;
-                                    newY = i;
-                                    break;
-                                }
-
-                            }
-                            
-                        }
-                    }
-                }
-
-
-
-
-            }
-
+            
 
 
         }
+
+        if(found == 0){
+            int newX = -1, newY = -1;
+
+            for(int i =1;i<HEIGHT;i+=2){
+
+                for(int j=1;j<WIDTH;j+=2){
+
+                    if(maze[i][j]==1){
+
+                        for(int s=0;s<4;s++){
+
+                            int nx = j + dx[s];
+                            int ny = i + dy[s];
+                          //   printMaze();
+                         //    Sleep(10);
+                          //   system("cls");
+
+
+                            if(isvalid(nx,ny)){
+                                newX = j;
+                                newY = i;
+                                break;
+                            }
+
+                        }
+                        
+                    }
+                    if(newX != -1){
+                        break;
+                    }
+                        
+                    
+                }
+                if(newX != -1){
+                    break;
+                }
+            }
+
+            if(newX == -1){
+                return; //full grid scaned
+            }
+
+            x = newX;
+            y = newY; //update x & y
+
+        }
+
 
 
 
@@ -140,6 +161,8 @@ int main() {
     int startY = (rand() % ((HEIGHT-1)/2))*2 +1;
 
     maze[startY][startX]=1;
+
+    huntAndKill(startX,startY);
     
     printMaze();
 

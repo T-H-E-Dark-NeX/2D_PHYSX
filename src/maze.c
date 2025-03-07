@@ -1,91 +1,160 @@
-#include <raylib.h>
-#include <stdlib.h>
-#include <time.h>
 
-#define WIDTH 21   // Must be odd
-#define HEIGHT 21  // Must be odd
-#define CELL_SIZE 30 // Size of each cell in pixels
+#include "stdio.h"
+#include "time.h"
+#include "stdlib.h"
 
-char maze[HEIGHT][WIDTH];
 
-// Directions: Right, Left, Down, Up
-int dx[] = {2, -2, 0, 0};
-int dy[] = {0, 0, 2, -2};
+//0 = wall
+//1 = path
 
-// Initialize the maze with walls
-void initialize_maze() {
-    for (int i = 0; i < HEIGHT; i++) {
-        for (int j = 0; j < WIDTH; j++) {
-            maze[i][j] = '#';  // Fill everything with walls
+#define WIDTH 23 
+#define HEIGHT 23
+
+int dir[] = {0,1,2,3}; //directions to be used in random direction
+
+
+int maze[HEIGHT][WIDTH]; //maze intialize
+
+    // Directions Up, Down, Left, Right
+int dx[] = {0, 0, -2, 2};  // Change in x
+int dy[] = {-2, 2, 0, 0};  // Change in y
+
+
+
+int isvalid(int x,int y){ //check bounds and if cell unvisite(=0)
+    return (x>0 && x < WIDTH-1 && y>0 && y<HEIGHT-1 && maze[y][x] == 0 );
+}
+
+
+
+void intialize(){             //intialize to 0 (unvisited)
+    for(int i=0;i<HEIGHT;i++){
+        for(int j=0;j<WIDTH;j++){
+            maze[i][j]=0;
         }
     }
 }
 
-// Check if a cell is within the maze bounds
-int is_valid(int x, int y) {
-    return (x > 0 && x < HEIGHT - 1 && y > 0 && y < WIDTH - 1);
-}
-
-// Recursive function to generate the maze
-void carve_maze(int x, int y) {
-    maze[x][y] = '.';  // Mark the current cell as a path
-
-    // Shuffle directions for randomness
-    int order[] = {0, 1, 2, 3};
-    for (int i = 0; i < 4; i++) {
-        int r = rand() % 4;
-        int temp = order[i];
-        order[i] = order[r];
-        order[r] = temp;
-    }
-
-    // Explore neighbors
-    for (int i = 0; i < 4; i++) {
-        int nx = x + dx[order[i]];
-        int ny = y + dy[order[i]];
-        
-        if (is_valid(nx, ny) && maze[nx][ny] == '#') {
-            maze[x + dx[order[i]] / 2][y + dy[order[i]] / 2] = '.'; // Remove wall
-            carve_maze(nx, ny);
-        }
-    }
-}
-
-// Draw the maze using Raylib
-void draw_maze() {
+void printMaze() {
     for (int i = 0; i < HEIGHT; i++) {
         for (int j = 0; j < WIDTH; j++) {
-            if (maze[i][j] == '#') {
-                DrawRectangle(j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE, BLACK);
-            } else {
-                DrawRectangle(j * CELL_SIZE, i * CELL_SIZE, CELL_SIZE, CELL_SIZE, WHITE);
+            printf(maze[i][j] ? " " : "██"   ); // if value true(!= 0)
+        }                                      //prints space path 
+                                                 //otherwise wall
+        printf("\n");
+    }
+}
+
+void randomdirection(int arr[],int size){
+    for(int i =0;i<size;++i){
+        int j = rand() % size;
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+    }
+    
+    
+    
+}
+
+void huntAndKill(int startX, int startY) {
+    int x = startX, y = startY;
+    
+    while(1){
+     
+        randomdirection(dir,4);
+        int found = 0;
+
+        for(int i = 0; i < 4; i++){
+              
+            int nx = x +dx[dir[i]];
+            int ny = y +dy[dir[i]];
+
+            if(isvalid(nx,ny)){
+
+                maze[(y+ny)/2][(x+nx)/2] = 1; //make path
+
+                maze[ny][nx] = 1;// make path to other cell
+
+                //dir update
+                x = nx;
+                y = ny;
+                found = 1; //found path
+                break; //onto next iteration
+
             }
+
+            
+
+
         }
+
+        if(found == 0){
+            int newX = -1, newY = -1;
+
+            for(int i =1;i<HEIGHT;i+=2){
+
+                for(int j=1;j<WIDTH;j+=2){
+
+                    if(maze[i][j]==1){
+
+                        for(int s=0;s<4;s++){
+
+                            int nx = j + dx[s];
+                            int ny = i + dy[s];
+
+                            if(isvalid(nx,ny)){
+                                newX = j;
+                                newY = i;
+                                break;
+                            }
+
+                        }
+                        
+                    }
+                    if(newX != -1){
+                        break;
+                    }
+                        
+                    
+                }
+                if(newX != -1){
+                    break;
+                }
+            }
+
+            if(newX == -1){
+                return; //full grid scaned
+            }
+
+            x = newX;
+            y = newY; //update x & y
+
+        }
+
+
+
+
+
     }
+
+
 }
+
+
+
 
 int main() {
-    srand(time(NULL));  // Seed random generator
-    InitWindow(WIDTH * CELL_SIZE, HEIGHT * CELL_SIZE, "Maze Generator - Raylib");
-    SetTargetFPS(60);
+    srand(time(0));
+    intialize();
+    int startX = (rand() % ((WIDTH-1)/2))*2 +1;
+    int startY = (rand() % ((HEIGHT-1)/2))*2 +1;
 
-    initialize_maze();  // Set up walls
-    carve_maze(1, 1);   // Generate maze from (1,1)
+    maze[startY][startX]=1;
 
-    while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_R)) { // Press 'R' to regenerate the maze
-            initialize_maze();
-            carve_maze(1, 1);
-        }
+    huntAndKill(startX,startY);
+    
+    printMaze();
 
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-        draw_maze();
-        DrawText("Press R to regenerate", 10, 10, 20, RED);
-        EndDrawing();
-    }
-
-    CloseWindow();
     return 0;
 }
-gi
