@@ -1,428 +1,408 @@
-#define     UP 1
-#define  RIGHT 2
-#define   DOWN 4
-#define   LEFT 8
-#define   DEAD 16
-#define MASKED 32
+#include "stdio.h"
+#include "time.h"
+#include "stdlib.h"
+#include "windows.h"
 
-#define       white 0xffffffff
-#define       black 0xff000000
-#define transparent 0x00000000
+//0 = wall
+//1 = path
 
-#include "raylib.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#define WIDTH 511
+#define HEIGHT 511
+#define NUM_THREADS 16  // Increased to 16 threads
+#define VISUALIZATION_DELAY 50  // Milliseconds between visualization updates
 
+int dir[] = {0,1,2,3}; //directions to be used in random direction
 
-typedef unsigned char byte; // Add this line to define the byte type
+int maze[HEIGHT][WIDTH]; //maze initialize
+CRITICAL_SECTION mazeLock; // For thread synchronization
+CRITICAL_SECTION visualLock; // For visualization synchronization
+volatile int activeThreads = 0; // Count of threads still actively carving
+volatile BOOL visualizationRunning = TRUE; // Flag to control visualization thread
 
-static void dfs_mazer( byte *M, int x, int y, byte dir, int W, int H ){
+// Directions Up, Down, Left, Right
+int dx[] = {0, 0, -2, 2};  // Change in x
+int dy[] = {-2, 2, 0, 0};  // Change in y
 
-	int yW = y * W;
+// Color codes for different threads
+WORD threadColors[16] = {
+    FOREGROUND_RED | FOREGROUND_INTENSITY,
+    FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+    FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+    FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY,
+    FOREGROUND_RED,
+    FOREGROUND_GREEN,
+    FOREGROUND_BLUE,
+    FOREGROUND_RED | FOREGROUND_GREEN,
+    FOREGROUND_RED | FOREGROUND_BLUE,
+    FOREGROUND_GREEN | FOREGROUND_BLUE,
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+    FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY | FOREGROUND_BLUE,
+    FOREGROUND_INTENSITY
+};
 
-	if( M[x + yW] == 0 ) M[x + yW] = dir;
-	else M[x + yW] |= dir;
+// Thread parameter structure
+typedef struct {
+    int startX;
+    int startY;
+    int threadId;
+} ThreadParams;
 
-	switch( dir ){
-		case    UP: y -= 1; break;
-		case RIGHT: x += 1; break;
-		case  DOWN: y += 1; break;
-		case  LEFT: x -= 1; break;
-	}
+// Structure to track thread positions for visualization
+typedef struct {
+    int x;
+    int y;
+    int active;
+} ThreadPosition;
 
-	yW = y * W;
+ThreadPosition threadPositions[NUM_THREADS];
 
-	byte options [4];
-	int o_n;
+int isvalid(int x, int y) {
+    if (x <= 0 || x >= WIDTH-1 || y <= 0 || y >= HEIGHT-1)
+        return 0;
+    
+    EnterCriticalSection(&mazeLock);
+    int result = (maze[y][x] == 0);
+    LeaveCriticalSection(&mazeLock);
+    
+    return result;
+}
 
-	check_again:;
-
-	o_n = 0;
-	
-	if( y > 0   && M[x + (yW-W)] == 0 ){ //UP
-		options[0] = 1;
-		o_n += 1;
-	}else options[0] = 0;
-
-    if( x < W-1 && M[x+1 + yW] == 0 ){ //RIGHT
-    	options[1] = 1;
-    	o_n += 1;
-    }else options[1] = 0;
-
-    if( y < H-1 && M[x + (yW+W)] == 0 ){ //DOWN
-    	options[2] = 1;
-    	o_n += 1;
-    }else options[2] = 0;
-
-    if( x > 0    && M[x-1 + yW] == 0 ){ //LEFT
-    	options[3] = 1;
-    	o_n += 1;
-    }else options[3] = 0;
-
-
-    //printf("x: %d, y: %d, pD: %d, dir: %hhd, depth %d, o_n:%d\n", x, y, pD, dir, depth, o_n );
-
-    if( o_n == 0 ){
-    	if( M[x + yW] == 0 ) M[x + yW] = DEAD;
-		else M[x + yW] |= DEAD;
-		//printf("died at depth %d, D: %d.\n", depth, D[x][y] );
+void initialize() {
+    for(int i=0; i<HEIGHT; i++) {
+        for(int j=0; j<WIDTH; j++) {
+            maze[i][j] = 0;
+        }
     }
-    else if ( o_n == 1 ){
-    	for(int i = 0; i < 4; i++){
-    		if( options[i] ){
-    			dfs_mazer( M, x, y, 1 << i, W, H );
-    			break;
-    		}
-    	}
-    }
-    else{
-    	int o = rand() % o_n;
-    	int c = 0;
-    	for(int i = 0; i < 4; i++){
-    		if( options[i] ){
-    			if( c == o ){
-					dfs_mazer( M, x, y, 1 << i, W, H );
-					goto check_again;
-				}
-				else c++;
-    		}
-    	}
+    
+    // Initialize thread positions
+    for(int i=0; i<NUM_THREADS; i++) {
+        threadPositions[i].x = -1;
+        threadPositions[i].y = -1;
+        threadPositions[i].active = 0;
     }
 }
 
-
-void build_maze( byte *M, int W, int H ){
-
-	//byte *M = calloc( W * H, 1 );
-	int sx = rand() % W;
-	int sy = rand() % H;
-	byte dir = 1 << (rand() % 4);
-	if( sx == 0   && dir == LEFT  ) dir = RIGHT;
-	if( sx == W-1 && dir == RIGHT ) dir = LEFT;
-	if( sy == 0   && dir == UP    ) dir = DOWN;
-	if( sy == H-1 && dir == DOWN  ) dir = UP;
-	//printf("mazin' %d x %d, %d\n", sx, sy, dir );
-	dfs_mazer( M, sx, sy, dir, W, H );
-	//return M;
+// Set console cursor position
+void setCursorPosition(int x, int y) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    COORD pos = {(SHORT)x, (SHORT)y};
+    SetConsoleCursorPosition(hConsole, pos);
 }
 
-
-
-void build_maze_masked( byte *M, byte *mask, int *unmasked, int W, int H ){
-	//printf("building masked maze. W: %d, H: %d, mask: %p\n", W, H, mask );
-
-	int un = 0;
-	for(int j = 0; j < H; j++){
-		int J = j * W;
-		for(int i = 0; i < W; i++){
-			if( mask[i + J] ){
-				M[i + J] = MASKED;
-			}
-			else unmasked[un++] = i + J;
-		}
-	}
-	if( un == 0 ){
-		puts("fully masked!");
-		return;
-	}
-
-	int si = unmasked[ rand() % un ];
-	int sy = si / W;
-	int sx = si - (sy*W);
-	byte dir = 1 << (rand() % 4);
-
-	if( sx == 0   && dir == LEFT  ) dir = RIGHT;
-	if( sx == W-1 && dir == RIGHT ) dir = LEFT;
-	if( sy == 0   && dir == UP    ) dir = DOWN;
-	if( sy == H-1 && dir == DOWN  ) dir = UP;
-
-	//printf( "si: %d, sx: %d, sy: %d\n", si, sx, sy );
-	
-	dfs_mazer( M, sx, sy, dir, W, H );
+// Hide console cursor
+void hideCursor() {
+    HANDLE consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_CURSOR_INFO info;
+    info.dwSize = 100;
+    info.bVisible = FALSE;
+    SetConsoleCursorInfo(consoleHandle, &info);
 }
 
-
-byte *build_meta_maze( byte *meta, int meta_w, int meta_h, int cell_w, int cell_h ){
-
-	int W = meta_w * cell_w;
-	int H = meta_h * cell_h;
-	byte *M = calloc( W * H, 1 );
-
-	int ssize = cell_w * cell_h;
-	byte *sector = malloc( ssize );
-
-	for(int i = 0; i < meta_w; i++){
-		for(int j = 0; j < meta_h; j++){
-
-			//printf("\nbegin cell %d, %d\n", i, j );
-
-			memset( sector, 0, ssize );
-			build_maze( sector, cell_w, cell_h );
-			//puts("built cell");
-
-			for(int x = 0; x < cell_w; x++){
-				for(int y = 0; y < cell_h; y++){
-					M[ x + (i*cell_w) + ((y + (j*cell_h)) * W) ] = sector[ x + (y*cell_w) ];
-				}
-			}//puts("copied cell");
-			
-			int here = i + (j * meta_w);
-
-			if( meta[ here ] & UP ){
-				int N = 1;//random_from_list( 7, 1, 1, 1, 1, 2, 2, 3 );
-				int min = cell_w;
-				int max = 0;
-				int offset = (i*cell_w) + ((j*cell_h) * W);
-				for(int x = 0; x < cell_w; x++){
-					if( M[ x + offset ] != MASKED ){
-						if( x < min ) min = x;
-						if( x > max ) max = x;
-					}
-				}
-				max += 1;
-				for(int n = 0; n < N; n++){
-					int x = rand() % (max - min) + min;
-					M[ x + offset ] |= UP;
-				}
-			}	
-			if( meta[ here ] & RIGHT ){
-				int N = 1;//random_from_list( 7, 1, 1, 1, 1, 2, 2, 3 );
-				int min = cell_h;
-				int max = 0;
-				int offset = (cell_w-1) + (i*cell_w) + ((j*cell_h) * W);
-				for(int y = 0; y < cell_h; y++){
-					if( M[ offset + (y * W)  ] != MASKED ){
-						if( y < min ) min = y;
-						if( y > max ) max = y;
-					}
-				}
-				max += 1;
-				for(int n = 0; n < N; n++){
-					int y = rand() % (max - min) + min;
-					M[ offset + (y * W) ] |= RIGHT;
-				}
-			}	
-			if( meta[ here ] & DOWN  ){
-				int N = 1;//random_from_list( 7, 1, 1, 1, 1, 2, 2, 3 );
-				int min = cell_w;
-				int max = 0;
-				int offset = (i*cell_w) + ( ((cell_h-1)+(j*cell_h)) * W );
-				for(int x = 0; x < cell_w; x++){
-					if( M[ x + offset ] != MASKED ){
-						if( x < min ) min = x;
-						if( x > max ) max = x;
-					}
-				}
-				max += 1;
-				for(int n = 0; n < N; n++){
-					int x = rand() % (max - min) + min;
-					M[ x + offset ] |= DOWN;
-				}
-			}	
-			if( meta[ here ] & LEFT  ){
-				int N = 1;//random_from_list( 7, 1, 1, 1, 1, 2, 2, 3 );
-				int min = cell_h;
-				int max = 0;
-				int offset = (i*cell_w) + ((j*cell_h) * W);
-				for(int y = 0; y < cell_h; y++){
-					if( M[ offset + (y * W) ] != MASKED ){
-						if( y < min ) min = y;
-						if( y > max ) max = y;
-					}
-				}
-				max += 1;
-				for(int n = 0; n < N; n++){
-					int y = rand() % (max - min) + min;
-					M[ offset + (y * W) ] |= LEFT;
-				}
-			}
-			//puts("did connections");
-		}
-	}
-
-	free( sector );   //puts("freed sector");
-
-	return M;
+// Set text color
+void setColor(WORD color) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(hConsole, color);
 }
 
+// Reset color to default
+void resetColor() {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+}
 
-
-Texture2D rasterize_maze(byte *M, int W, int H, int pw) {
-    int pw1 = pw + 1;
-    int FW = (W * pw1) + 1;
-    int FH = (H * pw1) + 1;
-    Image image = GenImageColor(FW, FH, BLACK);
-
-    for (int j = H - 1; j >= 0; j--) {
-        int jW = j * W;
-        int y = pw1 * j;
-        for (int i = W - 1; i >= 0; i--) {
-            int x = pw1 * i;
-            if (M[i + jW] & MASKED || M[i + jW] == 0) {
-                for (int l = 0; l <= pw; l++) {
-                    for (int k = 0; k <= pw; k++) {
-                        ImageDrawPixel(&image, x + k, y + l, BLACK);
+// Visualization function that runs in a separate thread
+DWORD WINAPI visualizationThread(LPVOID param) {
+    HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    
+    // Set console to a reasonable size
+    system("mode con cols=120 lines=40");
+    
+    // Hide cursor
+    hideCursor();
+    
+    // Clear the screen once
+    system("cls");
+    
+    // Get the console window size
+    GetConsoleScreenBufferInfo(hConsole, &csbi);
+    int consoleWidth = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    int consoleHeight = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    
+    // Calculate the visible section of the maze
+    int visibleWidth = consoleWidth - 2;
+    int visibleHeight = consoleHeight - 5;
+    
+    // Display information
+    setCursorPosition(0, 0);
+    printf("Maze Generation in Progress - 16 Threads Working");
+    setCursorPosition(0, 1);
+    printf("---------------------------------------------");
+    
+    // Main visualization loop
+    while(visualizationRunning) {
+        EnterCriticalSection(&visualLock);
+        
+        // Display active threads count
+        setCursorPosition(0, consoleHeight - 2);
+        printf("Active Threads: %-3d", activeThreads);
+        
+        // Find the center of activity (average position of active threads)
+        int centerX = WIDTH / 2;
+        int centerY = HEIGHT / 2;
+        int activeCount = 0;
+        
+        for(int i = 0; i < NUM_THREADS; i++) {
+            if(threadPositions[i].active) {
+                centerX += threadPositions[i].x;
+                centerY += threadPositions[i].y;
+                activeCount++;
+            }
+        }
+        
+        if(activeCount > 0) {
+            centerX /= (activeCount + 1);
+            centerY /= (activeCount + 1);
+        }
+        
+        // Calculate view boundaries
+        int startX = max(1, centerX - visibleWidth / 2);
+        int startY = max(1, centerY - visibleHeight / 2);
+        int endX = min(WIDTH - 1, startX + visibleWidth);
+        int endY = min(HEIGHT - 1, startY + visibleHeight);
+        
+        // Display the visible section of the maze
+        for(int y = startY; y < endY; y++) {
+            setCursorPosition(0, y - startY + 3);
+            for(int x = startX; x < endX; x++) {
+                // Check if this position has a thread in it
+                BOOL hasThread = FALSE;
+                for(int t = 0; t < NUM_THREADS; t++) {
+                    if(threadPositions[t].active && 
+                       threadPositions[t].x == x && 
+                       threadPositions[t].y == y) {
+                        setColor(threadColors[t]);
+                        printf("o");
+                        hasThread = TRUE;
+                        break;
                     }
                 }
+                
+                if(!hasThread) {
+                    resetColor();
+                    printf(maze[y][x] ? " " : "O");
+                }
+            }
+            printf("   "); // Clear any leftover characters
+        }
+        
+        LeaveCriticalSection(&visualLock);
+        
+        // Wait a bit before next update
+        Sleep(VISUALIZATION_DELAY);
+    }
+    
+    resetColor();
+    return 0;
+}
+
+void randomdirection(int arr[], int size) {
+    for(int i = 0; i < size; ++i) {
+        int j = rand() % size;
+        int temp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = temp;
+    }
+}
+
+// Threaded Hunt and Kill algorithm
+DWORD WINAPI threadedHuntAndKill(LPVOID param) {
+    ThreadParams* tp = (ThreadParams*)param;
+    int x = tp->startX, y = tp->startY;
+    int threadId = tp->threadId;
+    
+    // Update thread position
+    EnterCriticalSection(&visualLock);
+    threadPositions[threadId].x = x;
+    threadPositions[threadId].y = y;
+    threadPositions[threadId].active = 1;
+    LeaveCriticalSection(&visualLock);
+    
+    int threadActive = 1;
+    
+    while(threadActive && activeThreads > 0) {
+        int localDir[4] = {0, 1, 2, 3};
+        randomdirection(localDir, 4);
+        int found = 0;
+
+        for(int i = 0; i < 4; i++) {
+            int nx = x + dx[localDir[i]];
+            int ny = y + dy[localDir[i]];
+
+            if(isvalid(nx, ny)) {
+                EnterCriticalSection(&mazeLock);
+                maze[(y+ny)/2][(x+nx)/2] = 1; // make path
+                maze[ny][nx] = 1;             // make path to other cell
+                LeaveCriticalSection(&mazeLock);
+
+                // Update thread position for visualization
+                EnterCriticalSection(&visualLock);
+                threadPositions[threadId].x = nx;
+                threadPositions[threadId].y = ny;
+                LeaveCriticalSection(&visualLock);
+                
+                // dir update
+                x = nx;
+                y = ny;
+                found = 1; // found path
+                
+                // Small delay to make visualization visible
+                Sleep(10);
+                break;     // onto next iteration
+            }
+        }
+
+        if(found == 0) {
+            // Hunt phase
+            int newX = -1, newY = -1;
+            
+            // Check if we can find any valid cell to continue
+            for(int i = 1; i < HEIGHT; i += 2) {
+                for(int j = 1; j < WIDTH; j += 2) {
+                    EnterCriticalSection(&mazeLock);
+                    int cellIsPath = (maze[i][j] == 1);
+                    LeaveCriticalSection(&mazeLock);
+                    
+                    if(cellIsPath) {
+                        for(int s = 0; s < 4; s++) {
+                            int nx = j + dx[s];
+                            int ny = i + dy[s];
+
+                            if(isvalid(nx, ny)) {
+                                newX = j;
+                                newY = i;
+                                
+                                // Update thread position for visualization
+                                EnterCriticalSection(&visualLock);
+                                threadPositions[threadId].x = j;
+                                threadPositions[threadId].y = i;
+                                LeaveCriticalSection(&visualLock);
+                                
+                                break;
+                            }
+                        }
+                    }
+                    if(newX != -1) break;
+                }
+                if(newX != -1) break;
+            }
+
+            if(newX == -1) {
+                // This thread is done, decrement active threads
+                EnterCriticalSection(&mazeLock);
+                activeThreads--;
+                threadActive = 0;
+                LeaveCriticalSection(&mazeLock);
+                
+                // Mark thread as inactive for visualization
+                EnterCriticalSection(&visualLock);
+                threadPositions[threadId].active = 0;
+                LeaveCriticalSection(&visualLock);
+                
+                // Sleep a bit to give other threads a chance
+                Sleep(10);
             } else {
-                ImageDrawPixel(&image, x, y, WHITE);
-                for (int l = 1; l <= pw; l++) {
-                    for (int k = 1; k <= pw; k++) {
-                        ImageDrawPixel(&image, x + k, y + l, BLACK);
-                    }
-                }
-                // LEFT WALL
-                if (i > 0 && ((M[i + jW] & LEFT) || (M[i - 1 + jW] & RIGHT))) {
-                    for (int l = 1; l <= pw; l++) {
-                        ImageDrawPixel(&image, x, y + l, BLACK);
-                    }
-                } else {
-                    for (int l = 1; l <= pw; l++) {
-                        ImageDrawPixel(&image, x, y + l, WHITE);
-                    }
-                }
-                // TOP WALL
-                if (j > 0 && ((M[i + jW] & UP) || (M[i + ((j - 1) * W)] & DOWN))) {
-                    for (int k = 1; k <= pw; k++) {
-                        ImageDrawPixel(&image, x + k, y, BLACK);
-                    }
-                } else {
-                    for (int k = 1; k <= pw; k++) {
-                        ImageDrawPixel(&image, x + k, y, WHITE);
-                    }
-                }
-                // RIGHT WALL
-                if (i == W - 1 || M[i + 1 + jW] == MASKED || M[i + 1 + jW] == 0) {
-                    for (int l = 0; l <= pw1; l++) {
-                        ImageDrawPixel(&image, x + pw1, y + l, WHITE);
-                    }
-                }
-                // BOTTOM WALL
-                if (j == H - 1 || M[i + ((j + 1) * W)] == MASKED || M[i + ((j + 1) * W)] == 0) {
-                    for (int k = 0; k <= pw1; k++) {
-                        ImageDrawPixel(&image, x + k, y + pw1, WHITE);
-                    }
-                }
+                x = newX;
+                y = newY; // update x & y
             }
         }
     }
-
-    return LoadTextureFromImage(image);
+    
+    free(tp);
+    return 0;
 }
 
-
-bool *boolify_maze(byte *M, int W, int H, int pw ){
-
-	int pw1 = pw+1;
-	int FW = (W * pw1) + 1;
-	int FH = (H * pw1) + 1;
-
-	bool *bm = malloc( FW * FH * sizeof(byte) );
-
-	for(int j = H-1; j >= 0; j--){
-		int jW = j * W;
-		int y = pw1 * j;
-		int yFW = y * FW;
-		for(int i = W-1; i >= 0; i--){
-
-			int x = pw1 * i;
-
-			if( M[ i + jW ] & MASKED || M[ i + jW ] == 0 ){
-				for(int l = 0; l <= pw; l++){
-					int ylW = (y+l)*FW;
-					for(int k = 0; k <= pw; k++){
-
-						bm[ x + k + ylW ] = 0;
-					}
-				}
-			}
-			else{
-
-				int x = pw1 * i;
-				bm[ x + yFW ] = 1;
-
-				for(int l = 1; l <= pw; l++){
-					int ylW = (y+l)*FW;
-					for(int k = 1; k <= pw; k++){
-
-						bm[ x + k + ylW ] = 0;
-					}
-				}
-
-				//LEFT WALL
-				if( i > 0 && ((M[ i + jW ] & LEFT) || (M[ i-1 + jW ] & RIGHT)) ){
-					for(int l = 1; l <= pw; l++){
-						bm[ x + ((y+l)*FW) ] = 0;
-					}
-				}
-				else{
-					for(int l = 1; l <= pw; l++){
-						bm[ x + ((y+l)*FW) ] = 1;
-					}
-				}
-				//TOP WALL
-				if( j > 0 && ((M[ i + jW ] & UP) || (M[ i + ((j-1)*W) ] & DOWN)) ){
-					for(int k = 1; k <= pw; k++){
-						bm[ x+k + yFW ] = 0;
-					}
-				}
-				else{
-					for(int k = 1; k <= pw; k++){
-						bm[ x+k + yFW ] = 1;
-					}
-				}
-				//RIGHT WALL
-				if( i == W-1 || M[ i+1 + jW ] == MASKED || M[ i+1 + jW ] == 0 ){
-					for(int l = 0; l <= pw1; l++){
-						bm[ x+pw1 + ((y+l)*FW) ] = 1;
-					}
-				}
-				//BOTTOM WALL
-				if( j == H-1 || M[ i + ((j+1)*W) ] == MASKED || M[ i + ((j+1)*W) ] == 0 ){
-					for(int k = 0; k <= pw1; k++){
-						bm[ x+k + ((y+pw1)*FW) ] = 1;
-					}
-				}
-			}
-		}
-	}
-
-	return bm;
-}
-
-int main(void) {
-    // Initialization
-    const int screenWidth = 800;
-    const int screenHeight = 600;
-
-    InitWindow(screenWidth, screenHeight, "Maze Generator");
-
-    SetTargetFPS(60);
-
-    // Example usage of the maze functions
-    int W = 20;
-    int H = 20;
-    byte *maze = calloc(W * H, sizeof(byte));
-    build_maze(maze, W, H);
-    Texture2D mazeTexture = rasterize_maze(maze, W, H, 10);
-
-    // Main game loop
-    while (!WindowShouldClose()) {
-        // Update
-
-        // Draw
-        BeginDrawing();
-        ClearBackground(RAYWHITE);
-        DrawTexture(mazeTexture, 0, 0, WHITE);
-        EndDrawing();
+// Function to print final maze
+void printFinalMaze() {
+    system("cls");
+    for (int i = 0; i < HEIGHT; i++) {
+        for (int j = 0; j < WIDTH; j++) {
+            printf(maze[i][j] ? " " : "#");
+        }
+        printf("\n");
     }
+}
 
-    // De-Initialization
-    UnloadTexture(mazeTexture);
-    free(maze);
-    CloseWindow();
-
+int main() {
+    srand(time(0));
+    initialize();
+    
+    InitializeCriticalSection(&mazeLock);
+    InitializeCriticalSection(&visualLock);
+    
+    HANDLE threads[NUM_THREADS];
+    HANDLE visThread;
+    
+    // Initialize activeThreads
+    activeThreads = NUM_THREADS;
+    
+    // Create visualization thread
+    visThread = CreateThread(
+        NULL,                  // Default security attributes
+        0,                     // Default stack size
+        visualizationThread,   // Thread function
+        NULL,                  // Parameter to thread function
+        0,                     // Run immediately
+        NULL                   // Don't need thread ID
+    );
+    
+    // Create worker threads with different starting points
+    for (int i = 0; i < NUM_THREADS; i++) {
+        ThreadParams* tp = (ThreadParams*)malloc(sizeof(ThreadParams));
+        
+        // Generate starting point - make sure it's odd to align with the grid
+        tp->startX = (rand() % ((WIDTH-1)/2))*2 + 1;
+        tp->startY = (rand() % ((HEIGHT-1)/2))*2 + 1;
+        tp->threadId = i;
+        
+        // Set the starting point in the maze
+        EnterCriticalSection(&mazeLock);
+        maze[tp->startY][tp->startX] = 1;
+        LeaveCriticalSection(&mazeLock);
+        
+        threads[i] = CreateThread(
+            NULL,                  // Default security attributes
+            0,                     // Default stack size
+            threadedHuntAndKill,   // Thread function
+            tp,                    // Parameter to thread function
+            0,                     // Run immediately
+            NULL                   // Don't need thread ID
+        );
+    }
+    
+    // Wait for all worker threads to complete
+    WaitForMultipleObjects(NUM_THREADS, threads, TRUE, INFINITE);
+    
+    // Signal visualization thread to stop and wait for it
+    visualizationRunning = FALSE;
+    WaitForSingleObject(visThread, 1000);
+    
+    // Close thread handles
+    for (int i = 0; i < NUM_THREADS; i++) {
+        CloseHandle(threads[i]);
+    }
+    CloseHandle(visThread);
+    
+    DeleteCriticalSection(&mazeLock);
+    DeleteCriticalSection(&visualLock);
+    
+    // Print final maze
+    printf("\nMaze generation complete! Press Enter to see the final maze...");
+    getchar();
+    printFinalMaze();
+    
     return 0;
 }
